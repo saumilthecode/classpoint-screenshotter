@@ -1,0 +1,21 @@
+[Unit]
+Description=ClassPoint Discord slide recorder
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/classpoint-screenshotter
+ExecStart=%h/classpoint-screenshotter/.venv/bin/python -m runner --config %h/.config/classpoint-screenshotter/config.json
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=15
+RestartPreventExitStatus=78
+TimeoutStopSec=70
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

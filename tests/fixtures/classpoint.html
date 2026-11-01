@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; background: #ec008c; font-family: sans-serif; }
+    header { height: 80px; color: white; }
+    .presenter_img { position: relative; width: 640px; margin: 30px 0 0 40px; line-height: 0; }
+    .presenter_img img { display: block; width: 640px; height: 360px; }
+    #sidebar { position: fixed; right: 10px; top: 100px; background: yellow; }
+    .annotation { position: absolute; left: 200px; top: 200px; width: 12px; height: 12px; background: #ff00ff; }
+  </style>
+</head>
+<body>
+  <input placeholder="Class code"><button id="code"><svg data-testid="ArrowForwardIcon"></svg></button>
+  <script>
+    document.querySelector("#code").onclick = () => {
+      document.body.innerHTML = `<input placeholder="Your name"><button id="go">Let's go!</button>`;
+      document.querySelector("#go").onclick = () => {
+        document.body.innerHTML = `<div class="classroom"><header>ClassPoint header — never save this</header><div class="presenter_img"></div><aside id="sidebar">Stars: 0</aside></div>`;
+      };
+    };
+    window.showSlide = (name) => {
+      const container = document.querySelector(".presenter_img");
+      container.querySelector(".annotation")?.remove();
+      let image = container.querySelector("img");
+      if (!image) {
+        image = document.createElement("img");
+        container.append(image);
+      }
+      image.src = `/test-slide-${name}.svg`;
+    };
+    window.annotate = () => {
+      const mark = document.createElement("span");
+      mark.className = "annotation";
+      document.querySelector(".presenter_img").append(mark);
+    };
+  </script>
+</body>
+</html>

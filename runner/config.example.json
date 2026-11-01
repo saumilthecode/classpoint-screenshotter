@@ -1,0 +1,17 @@
+{
+  "application_id": 0,
+  "guild_id": 0,
+  "channel_name": "classpoint-screenshotter",
+  "channel_id": null,
+  "allowed_user_ids": [],
+  "data_dir": "~/classpoint-screenshotter/data",
+  "token_file": "~/.config/classpoint-screenshotter/bot-token",
+  "poll_seconds": 1.0,
+  "settle_seconds": 0.6,
+  "end_grace_seconds": 15,
+  "disconnect_grace_seconds": 120,
+  "max_session_hours": 12,
+  "max_slides": 3000,
+  "min_free_mb": 512,
+  "status_update_seconds": 600
+}

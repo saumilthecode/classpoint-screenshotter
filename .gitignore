@@ -1,0 +1,41 @@
+# Local credentials and deployment settings
+.env
+.env.*
+!.env.example
+.config/
+config.json
+config.local.*
+bot-token*
+credentials.json
+secrets/
+*.pem
+*.key
+
+# Captured slides, PDFs, and session metadata
+/data/
+/recordings/
+/downloads/
+/screenshots/
+/tmp/
+/logs/
+*.log
+
+# Python environments and generated files
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Editor and operating system files
+.idea/
+.vscode/
+.DS_Store
+*~
