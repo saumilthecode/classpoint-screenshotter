@@ -74,7 +74,7 @@ class Session:
 
 
 def recover_sessions(root: Path):
-    """Preserve and publish partial recordings after a crash; never silently lose them."""
+    """Queue interrupted recordings for upload."""
     sessions = []
     for path in sorted(root.glob("*/manifest.json")):
         try:

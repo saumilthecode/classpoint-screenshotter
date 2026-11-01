@@ -78,7 +78,7 @@ class EndDetector:
     disconnected_since: float | None = None
 
     def update(self, state: dict, now: float) -> str | None:
-        # Losing the slideshow image alone is NEVER a class-end signal.
+        # A presenter can pause the slideshow without ending the class.
         end_signal = state.get("ended") or (state.get("join") and not state.get("classroom"))
         if end_signal:
             if self.ended_since is None:
@@ -109,7 +109,7 @@ class SlideRecorder:
         self.last_socket_frame = None
 
     def observe_socket(self, socket):
-        # Only the browser's ordinary ClassPoint classroom connection; no direct API joining.
+        # Track the classroom WebSocket for connection loss.
         parsed = urlparse(socket.url)
         if parsed.path != "/classsession" or not (parsed.hostname or "").endswith(".classpoint.app"):
             return

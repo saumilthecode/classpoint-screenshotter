@@ -1,4 +1,4 @@
-"""Lossless, edge-to-edge slide PDFs, split to fit the channel's attachment limit."""
+"""Build slide PDFs within the channel's attachment limit."""
 
 import io
 from pathlib import Path
@@ -36,7 +36,7 @@ def build_pdfs(session: Session, max_bytes: int) -> list[Path]:
         return []
     output = session.directory / "pdfs"
     output.mkdir(exist_ok=True)
-    # Split recursively by actual encoded size; don't guess from PNG sizes.
+    # Split by encoded PDF size, which can differ from the source PNG sizes.
     parts: list[tuple[bytes, int, int]] = []
 
     def split(first, last):

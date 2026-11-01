@@ -1,4 +1,4 @@
-// Read only the rendered slide and lifecycle UI. Never capture a whole browser page.
+// Locate the slide crop and read session status from the rendered page.
 () => {
   const visible = (element) => element && element.getClientRects().length > 0 &&
     getComputedStyle(element).visibility !== 'hidden';
@@ -6,12 +6,12 @@
   const join = [...document.querySelectorAll('input[placeholder="Class code"]')].some(visible);
   const notices = [...document.querySelectorAll('[role="dialog"], [role="alert"], .MuiDialog-root, .MuiSnackbar-root')]
     .filter(visible).map(element => element.innerText).join('\n');
-  // Outside a classroom, the landing/end screen is also lifecycle UI.
+  // Outside a classroom, end notices can appear directly on the page.
   const statusText = classroom ? notices : document.body.innerText;
   const ended = /(?:class|session)\s+(?:has\s+)?(?:ended|closed)|presenter\s+(?:has\s+)?(?:ended|closed|left)|removed from (?:the )?class/i.test(statusText);
   const disconnected = !navigator.onLine || /connection (?:lost|failed)|reconnecting|disconnected|unable to connect/i.test(notices);
   const state = { classroom, join, ended, disconnected, slide: null };
-  // A quiz/profile/connection dialog can cover the slide. Never save that UI.
+  // Skip slides covered by a dialog.
   if ([...document.querySelectorAll('[role="dialog"], .MuiDialog-root')].some(visible)) return state;
   const image = document.querySelector('.presenter_img:not(.audienceimage):not(.loading_page) img[src]');
   if (!classroom || !visible(image) || !image.complete || !image.naturalWidth || !image.naturalHeight) return state;

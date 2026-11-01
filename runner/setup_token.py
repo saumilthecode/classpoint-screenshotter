@@ -1,4 +1,4 @@
-"""Run over an interactive SSH session; never put a bot token in shell history."""
+"""Prompt for a bot token and save it to a private file."""
 
 import getpass
 import json

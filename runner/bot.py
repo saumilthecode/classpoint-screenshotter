@@ -169,7 +169,7 @@ class ClassPointBot(discord.Client):
                 f"{len(session.data['slides'])} unique slides saved.\nStarted <t:{started}:R>.")
 
     async def periodic_status(self, session, stop):
-        """Use normal channel posts, not the short-lived start interaction token."""
+        """Use channel messages so progress can outlive the start interaction."""
         while not stop.is_set():
             await pause_or_stop(stop, self.config.status_update_seconds)
             if stop.is_set() or self.active is not session or session.data["status"] != "recording":
@@ -182,7 +182,6 @@ class ClassPointBot(discord.Client):
                 await channel.send("Recording update\n" + self.session_status(session),
                                    allowed_mentions=discord.AllowedMentions.none())
             except (discord.HTTPException, OSError):
-                # A status-post failure must never interrupt capturing or final delivery.
                 LOG.warning("Could not post progress update for %s; will retry next interval", session.data["id"])
 
     async def record(self, session, interaction):
@@ -213,7 +212,7 @@ class ClassPointBot(discord.Client):
             if status_task is not None:
                 status_task.cancel()
                 await asyncio.gather(status_task, return_exceptions=True)
-            # Capture failures never bypass finalization of already-saved slides.
+            # Finalize saved slides even if capture failed.
             session.finish(locals().get("reason", "Recording was interrupted."))
             self.active = None
             self.upload_wakeup.set()
