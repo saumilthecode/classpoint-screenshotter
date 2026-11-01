@@ -12,7 +12,8 @@ from urllib.parse import urlparse
 from playwright.async_api import Error as BrowserError, async_playwright
 
 from .config import Config
-from .state import Session, pixel_hash
+from .dedupe import comparison_hash
+from .state import Session
 
 JOIN_URL = "https://www.classpoint.app/"
 READ_STATE = Path(__file__).with_name("slide.js").read_text()
@@ -144,12 +145,12 @@ class SlideRecorder:
             self.candidate = None
             return False
         png = base64.b64decode(result["data"])
-        digest = await asyncio.to_thread(pixel_hash, png)
+        digest = await asyncio.to_thread(comparison_hash, png)
         if digest != self.candidate:
             self.candidate, self.candidate_since = digest, now
         if now - self.candidate_since < self.config.settle_seconds:
             return False
-        if digest in self.session.hashes:
+        if await asyncio.to_thread(self.session.is_duplicate, png, digest):
             return False
         if len(self.session.images) >= self.config.max_slides:
             raise RuntimeError("Slide safety limit reached; recorded slides are preserved.")

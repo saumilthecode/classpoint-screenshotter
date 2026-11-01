@@ -86,6 +86,8 @@ systemctl --user stop classpoint-screenshotter
 
 The recorder captures the slide area and compares decoded pixels against earlier captures in the session. It skips duplicates, waiting screens, sharing-disabled placeholders, and slides covered by dialogs. Edits and annotations produce new images. Short-lived slides and continuous animations can be missed because capture requires stable content.
 
+Deduplication also recognizes the PowerPoint navigation strip that sometimes appears at the bottom left. The entire strip must match the bundled template exactly; unfamiliar controls and any added marks are kept. The rest of the slide is compared pixel for pixel, and original PNGs are saved unchanged.
+
 A return to the join screen or an end/removal notice ends recording after a grace period. Leaving slideshow mode alone does not end it; use `/classpoint stop` if the class stays open.
 
 | Setting | Default |
@@ -120,6 +122,6 @@ Manifests contain classroom names, class codes, Discord IDs, timestamps, and upl
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The tests use a local ClassPoint fixture and simulated Discord interactions. They cover cropping, deduplication, annotations, stabilization, end detection, recovery, PDF fidelity and splitting, upload retries, command scope, and progress posts. They do not join a live class or send messages.
+The tests use a local ClassPoint fixture and simulated Discord interactions. They cover cropping, deduplication, navigation controls, one-pixel annotations, stabilization, end detection, recovery, PDF fidelity and splitting, upload retries, command scope, and progress posts. They do not join a live class or send messages.
 
 ClassPoint interface changes can break the selectors in `runner/capture.py` and `runner/slide.js`. The fixture tests do not check compatibility with the live site.

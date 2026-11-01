@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
-import io
 import json
 import logging
 from pathlib import Path
 import uuid
 
-from PIL import Image
+from .dedupe import COMPARISON_VERSION, comparison_hash, pixel_hash
 
 
 def utc_now():
@@ -21,17 +19,31 @@ def atomic_write(path: Path, contents: bytes):
     temporary.replace(path)
 
 
-def pixel_hash(png: bytes):
-    with Image.open(io.BytesIO(png)) as image:
-        image = image.convert("RGB")
-        return hashlib.sha256(f"{image.width}x{image.height}:".encode() + image.tobytes()).hexdigest()
-
-
 class Session:
     def __init__(self, directory: Path, data: dict):
         self.directory = directory
         self.data = data
         self.hashes = {s["hash"] for s in data.get("slides", [])}
+        self._comparison_hashes = None
+
+    @property
+    def comparison_hashes(self):
+        if self._comparison_hashes is None:
+            self._comparison_hashes = set()
+            for slide in self.data.get("slides", []):
+                if slide.get("comparison_version") == COMPARISON_VERSION:
+                    self._comparison_hashes.add(slide["comparison_hash"])
+                else:
+                    try:
+                        png = (self.directory / "images" / slide["file"]).read_bytes()
+                        self._comparison_hashes.add(comparison_hash(png))
+                    except OSError:
+                        # Exact hashes still work if an old image is missing or unreadable.
+                        continue
+        return self._comparison_hashes
+
+    def is_duplicate(self, png: bytes, comparison: str):
+        return comparison in self.comparison_hashes or pixel_hash(png) in self.hashes
 
     @classmethod
     def create(cls, root: Path, code: str, name: str, requester_id: int, channel_id: int):
@@ -58,10 +70,17 @@ class Session:
         digest = pixel_hash(png)
         if digest in self.hashes:
             return False
+        comparison = comparison_hash(png)
+        if comparison in self.comparison_hashes:
+            return False
         filename = f"slide-{len(self.data['slides']) + 1:04d}.png"
         atomic_write(self.directory / "images" / filename, png)
-        self.data["slides"].append({"file": filename, "hash": digest, "captured_at": utc_now()})
+        self.data["slides"].append({"file": filename, "hash": digest,
+                                    "comparison_hash": comparison,
+                                    "comparison_version": COMPARISON_VERSION,
+                                    "captured_at": utc_now()})
         self.hashes.add(digest)
+        self.comparison_hashes.add(comparison)
         self.save()
         return True
 
