@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import io
 import json
+import logging
 from pathlib import Path
 import uuid
 
@@ -84,6 +85,5 @@ def recover_sessions(root: Path):
             sessions.append(session)
         except (ValueError, KeyError, OSError):
             # Leave corrupt data untouched for manual recovery.
-            import logging
             logging.exception("Could not recover session manifest %s", path)
     return sessions

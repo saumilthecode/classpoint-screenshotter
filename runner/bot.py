@@ -187,6 +187,7 @@ class ClassPointBot(discord.Client):
     async def record(self, session, interaction):
         status_task = None
         stop = self.stop_event
+        reason = "Recording was interrupted."
 
         async def joined():
             nonlocal status_task
@@ -213,7 +214,7 @@ class ClassPointBot(discord.Client):
                 status_task.cancel()
                 await asyncio.gather(status_task, return_exceptions=True)
             # Finalize saved slides even if capture failed.
-            session.finish(locals().get("reason", "Recording was interrupted."))
+            session.finish(reason)
             self.active = None
             self.upload_wakeup.set()
 

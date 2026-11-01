@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime
-from pathlib import Path
 
 import discord
 
@@ -35,7 +34,7 @@ async def deliver_session(session: Session, channel, bot_id: int):
         existing = session.data.get("pdf_parts", [])
         paths = [session.directory / "pdfs" / part["file"] for part in existing]
         if not paths or not all(path.exists() for path in paths):
-            # The guild limit is appropriate for a later bot post, not an expiring interaction token.
+            # PDFs are sent as channel messages, using the guild's upload limit.
             limit = int(channel.guild.filesize_limit * 0.95)
             paths = await asyncio.to_thread(build_pdfs, session, limit)
         for index, path in enumerate(paths, 1):

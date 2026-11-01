@@ -35,13 +35,13 @@ def main():
         stream.write(token + "\n")
     temporary.chmod(0o600)
     temporary.replace(directory / "bot-token")
-    print("Token saved privately. No token was printed or put in shell history.")
+    print("Token saved privately.")
     unit = Path.home() / ".config/systemd/user/classpoint-screenshotter.service"
     if unit.exists():
         subprocess.run(["systemctl", "--user", "reset-failed", "classpoint-screenshotter"], check=False)
         result = subprocess.run(["systemctl", "--user", "restart", "classpoint-screenshotter"], check=False)
         if result.returncode == 0:
-            print("Runner started. Use /classpoint start in #classpoint-screenshotter.")
+            print("Runner started. Use /classpoint start in the configured channel.")
             return
     print("Start the runner with: systemctl --user restart classpoint-screenshotter")
 
