@@ -52,13 +52,16 @@ Use these in the configured channel:
 
 | Command | Action |
 | --- | --- |
-| `/classpoint start code:12345` | Join with your Discord display name, truncated to 25 characters. |
+| `/classpoint start code:12345` | Join as `saumil's assistant` by default. |
 | `/classpoint start code:12345 name:Your name` | Join with the supplied classroom name. |
-| `/classpoint status` | Show recording state, slide count, and pending uploads. |
-| `/classpoint stop` | Finish recording and upload the PDFs. |
+| `/classpoint start code:12345 export:sampled` | Sample rapid scene changes in the PDF; retain all original PNGs. |
+| `/classpoint status` | List active recordings, last saved images, connection state, slots, and PDF/upload progress. |
+| `/classpoint status code:12345` | Inspect one class. |
+| `/classpoint stop code:12345` | Finish that recording and upload its PDFs. |
+| `/classpoint stop` | Stop your only active recording; specify a code when ambiguous. |
 | `/classpoint retry` | Retry pending uploads, skipping completed parts. |
 
-One class records at a time. Only the starter or a member with **Manage Server** permission can stop it; the allowlist also applies. Replies and progress posts are public in the channel. Progress posts default to every 10 minutes, starting 10 minutes after joining.
+Up to three different classes record concurrently by default. Each has an independent browser, stop event, and progress task. Duplicate starts for the same class code are rejected. PDF generation and uploads share one queue. Only the starter or a member with **Manage Server** permission can stop it; the allowlist also applies. Replies and progress posts are public in the channel. Progress posts default to every 10 minutes, starting 10 minutes after joining. Status includes the last saved image time; after 30 minutes without a new image, posts include an inactivity reminder. Recording continues during pauses and repeated content.
 
 Use only for classes you have permission to record and share.
 
@@ -100,8 +103,10 @@ A return to the join screen or an end/removal notice ends recording after a grac
 | `max_slides` | 3000 slides |
 | `min_free_mb` | 512 MiB |
 | `status_update_seconds` | 600 seconds |
+| `max_concurrent_sessions` | 3 (configurable from 1 to 10) |
+| `inactivity_notice_seconds` | 1800 seconds |
 
-Each PDF page holds one slide at its original aspect ratio. PDFs split to fit the server's attachment limit. Failed uploads retry every minute. After a restart, interrupted recordings are queued as partial sessions without rejoining the class. Upload reconciliation checks the latest 200 channel messages; duplicates after a crash are still possible.
+Each PDF page holds one selected capture losslessly at its original aspect ratio. PDF generation encodes each image once, caches approximately one attachment's worth of pages, and checks each finished file against the server's attachment limit. Images are neither resized nor JPEG-compressed. Failed uploads retry every minute. After a restart, interrupted recordings are queued as partial sessions without rejoining the class. Upload reconciliation fetches the latest 200 channel messages once per attempt; duplicates after a crash are still possible. Rebuilt PDFs have unique filenames, acknowledged parts are preserved, and failed builds clean up their outputs. A storage error while recording upload failure does not stop the retry worker.
 
 Files stay under `data_dir`:
 
@@ -114,6 +119,23 @@ Files stay under `data_dir`:
 
 Manifests contain classroom names, class codes, Discord IDs, timestamps, and upload state. Files are not deleted automatically. Monitor disk usage and remove old recordings as needed. Credentials, deployment config, recordings, environments, and logs are excluded by `.gitignore`; keep custom output paths out of Git too.
 
+## PDF selection and local exports
+
+`export:all` is the default and includes every unique captured image. Exact deduplication preserves small annotations and treats distinct video frames as new content.
+
+`export:sampled` reduces long bursts of rapid visual changes in the PDF. A burst requires at least eight images, consecutive gaps of at most six seconds, and large changes in at least 40% of the transitions. A large change means at least 25% of a 64×36 thumbnail differs by more than 32 in an RGB channel. The PDF keeps the burst's first and last images and samples at intervals of at least 30 seconds. Small edits alone do not trigger sampling.
+
+Sampling is a visual change heuristic: it can also sample rapidly changing slides and omit annotations within a qualifying burst. Choose `all` when every intermediate state is needed. Every original PNG remains saved in either mode. The manifest records each PDF part's source image numbers.
+
+To export a finished recording again locally, including an older session:
+
+```sh
+.venv/bin/python -m runner.export data/<session-directory> --mode all
+.venv/bin/python -m runner.export data/<session-directory> --mode sampled --max-mb 9.5
+```
+
+These commands create a new folder under the session's `exports/` directory with the PDFs and `export.json`, including source image numbers. They do not change the original manifest or Discord uploads. `--output /path/to/new-folder` selects another destination; an existing destination is refused.
+
 ## Tests
 
 ```sh
@@ -122,6 +144,6 @@ Manifests contain classroom names, class codes, Discord IDs, timestamps, and upl
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The tests use a local ClassPoint fixture and simulated Discord interactions. They cover cropping, deduplication, navigation controls, one-pixel annotations, stabilization, end detection, recovery, PDF fidelity and splitting, upload retries, command scope, and progress posts. They do not join a live class or send messages.
+The tests use a local ClassPoint fixture and simulated Discord interactions. They cover cropping, deduplication, navigation controls, one-pixel annotations, stabilization, end detection, chronological recovery, concurrent recording ownership, stop permissions, shutdown, PDF fidelity and attachment limits, sampling, upload retries/reconciliation, failed storage, interrupted export workers, command scope, and progress posts. They do not join a live class or send messages.
 
 ClassPoint interface changes can break the selectors in `runner/capture.py` and `runner/slide.js`. The fixture tests do not check compatibility with the live site.

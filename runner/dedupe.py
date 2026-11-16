@@ -36,3 +36,18 @@ def pixel_hash(png):
 
 def comparison_hash(png):
     return _hash(png, True)
+
+
+def fingerprints(png):
+    """Calculate both fingerprints with one image decode."""
+    with Image.open(io.BytesIO(png)) as source:
+        image = source.convert("RGB")
+    prefix = f"{image.width}x{image.height}:".encode()
+    exact = hashlib.sha256(prefix + image.tobytes()).hexdigest()
+    (width, height), pixels = _controls()
+    if image.width >= width * 3 and image.height >= height * 8:
+        box = (0, image.height - height, width, image.height)
+        if image.crop(box).tobytes() == pixels:
+            image.paste((255, 255, 255), box)
+            return exact, hashlib.sha256(prefix + image.tobytes()).hexdigest()
+    return exact, exact

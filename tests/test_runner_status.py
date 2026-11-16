@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from runner.bot import ClassPointBot
+from runner.bot import ClassPointBot, Recording
 from runner.config import Config
 from runner.state import Session
 
@@ -20,10 +20,11 @@ class StatusUpdatesTest(unittest.IsolatedAsyncioTestCase):
         self.bot = ClassPointBot(self.config)
         self.session = Session.create(self.root, "12345", "Test", 10, 20)
         self.session.data["phase"] = "waiting for presenter/slides"
-        self.bot.active = self.session
+        self.recording = Recording(self.session)
+        self.bot.recordings["12345"] = self.recording
         self.channel = SimpleNamespace(id=20, send=AsyncMock())
         self.bot.output_channel = lambda: self.channel
-        self.stop = asyncio.Event()
+        self.stop = self.recording.stop
         self.group = self.bot.tree.get_commands(guild=SimpleNamespace(id=2))[0]
         self.interaction = SimpleNamespace(
             response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
@@ -48,7 +49,7 @@ class StatusUpdatesTest(unittest.IsolatedAsyncioTestCase):
                 stop.set()
 
         with patch("runner.bot.pause_or_stop", side_effect=tick):
-            await self.bot.periodic_status(self.session, self.stop)
+            await self.bot.periodic_status(self.recording)
         self.assertEqual(self.channel.send.await_count, 2)
         for call in self.channel.send.await_args_list:
             self.assertIn("12345", call.args[0])
@@ -59,20 +60,20 @@ class StatusUpdatesTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(call.kwargs["allowed_mentions"].everyone)
 
     async def test_stop_interrupts_wait_without_posting(self):
-        task = asyncio.create_task(self.bot.periodic_status(self.session, self.stop))
+        task = asyncio.create_task(self.bot.periodic_status(self.recording))
         await asyncio.sleep(0)
         self.stop.set()
         await asyncio.wait_for(task, 0.5)
         self.channel.send.assert_not_awaited()
 
     async def test_finished_or_replaced_session_does_not_post(self):
-        for transition in (lambda: self.session.finish("Done"), lambda: setattr(self.bot, "active", None)):
+        for transition in (lambda: self.session.finish("Done"), lambda: self.bot.recordings.pop("12345", None)):
             self.session.data["status"] = "recording"
-            self.bot.active = self.session
+            self.bot.recordings["12345"] = self.recording
             async def tick(*_args):
                 transition()
             with patch("runner.bot.pause_or_stop", side_effect=tick):
-                await self.bot.periodic_status(self.session, self.stop)
+                await self.bot.periodic_status(self.recording)
         self.channel.send.assert_not_awaited()
 
     async def test_status_failure_does_not_end_recording(self):
@@ -84,7 +85,7 @@ class StatusUpdatesTest(unittest.IsolatedAsyncioTestCase):
             if calls == 3:
                 stop.set()
         with patch("runner.bot.pause_or_stop", side_effect=tick), self.assertLogs("runner.bot", level="WARNING"):
-            await self.bot.periodic_status(self.session, self.stop)
+            await self.bot.periodic_status(self.recording)
         self.assertEqual(self.channel.send.await_count, 2)
         self.assertEqual(self.session.data["status"], "recording")
 
@@ -97,29 +98,27 @@ class StatusUpdatesTest(unittest.IsolatedAsyncioTestCase):
             if calls == 2:
                 stop.set()
         with patch("runner.bot.pause_or_stop", side_effect=tick), self.assertLogs("runner.bot", level="WARNING"):
-            await self.bot.periodic_status(self.session, self.stop)
+            await self.bot.periodic_status(self.recording)
         self.channel.send.assert_not_awaited()
 
     async def test_status_stop_and_retry_replies_are_public(self):
         await self.group.status.callback(self.group, self.interaction)
         await self.group.stop.callback(self.group, self.interaction)
-        self.bot.recording_task = asyncio.get_running_loop().create_future()
-        try:
-            await self.group.stop.callback(self.group, self.interaction)
-            self.assertTrue(self.bot.stop_event.is_set())
-        finally:
-            self.bot.recording_task.cancel()
+        self.stop.clear()
+        await self.group.stop.callback(self.group, self.interaction)
+        self.assertTrue(self.stop.is_set())
         await self.group.retry.callback(self.group, self.interaction)
         self.assertEqual(self.interaction.response.send_message.await_count, 4)
         self.assertTrue(all(call.kwargs["ephemeral"] is False
                             for call in self.interaction.response.send_message.await_args_list))
 
     async def test_start_defers_publicly(self):
-        self.bot.active = None
+        self.bot.recordings.clear()
         self.bot.record = AsyncMock()
         await self.group.start.callback(self.group, self.interaction, "12345")
-        await self.bot.recording_task
+        await self.bot.recordings["12345"].task
         self.interaction.response.defer.assert_awaited_once_with(ephemeral=False, thinking=True)
+        self.assertEqual(self.bot.recordings["12345"].session.data["name"], "saumil's assistant")
 
     async def test_progress_task_is_cleaned_up_at_end(self):
         progress_started, progress_cancelled = asyncio.Event(), asyncio.Event()
@@ -137,11 +136,34 @@ class StatusUpdatesTest(unittest.IsolatedAsyncioTestCase):
         self.bot.periodic_status = progress
         with patch("runner.bot.SlideRecorder") as recorder:
             recorder.return_value.run.side_effect = capture
-            await asyncio.wait_for(self.bot.record(self.session, self.interaction), 1)
+            await asyncio.wait_for(self.bot.record(self.recording, self.interaction), 1)
         self.assertTrue(progress_cancelled.is_set())
-        self.assertIsNone(self.bot.active)
+        self.assertNotIn("12345", self.bot.recordings)
         self.assertEqual(self.session.data["status"], "pending_upload")
         self.assertTrue(self.bot.upload_wakeup.is_set())
+
+    async def test_upload_worker_retries_after_failure_to_persist_upload_error(self):
+        self.session.finish("Class ended")
+        self.bot.sessions = [self.session]
+        self.bot._connection.user = SimpleNamespace(id=1)
+        attempts = 0
+
+        async def deliver(session, *_args):
+            nonlocal attempts
+            attempts += 1
+            self.bot.upload_wakeup.set()
+            if attempts == 1:
+                raise OSError("Disk is full during PDF export")
+            session.data["status"] = "uploaded"
+
+        with patch.object(self.bot, "wait_until_ready", new=AsyncMock()), \
+                patch.object(self.bot, "is_closed", side_effect=lambda: attempts >= 2), \
+                patch.object(self.session, "save", side_effect=OSError("Disk is full during error save")), \
+                patch("runner.bot.deliver_session", side_effect=deliver), \
+                self.assertLogs("runner.bot", level="ERROR"):
+            await asyncio.wait_for(self.bot.upload_loop(), 1)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(self.session.data["status"], "uploaded")
 
 
 if __name__ == "__main__":

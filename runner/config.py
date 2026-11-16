@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
 
 
@@ -20,16 +21,27 @@ class Config:
     max_slides: int = 3000
     min_free_mb: int = 512
     status_update_seconds: float = 600
+    max_concurrent_sessions: int = 3
+    inactivity_notice_seconds: float = 1800
 
     @classmethod
     def load(cls, path: Path):
         config = cls(**json.loads(path.read_text()))
+        for key in ("poll_seconds", "settle_seconds", "end_grace_seconds", "disconnect_grace_seconds",
+                    "max_session_hours", "min_free_mb", "status_update_seconds", "inactivity_notice_seconds"):
+            value = getattr(config, key)
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError(f"{key} must be a finite number")
         if config.poll_seconds < 0.1 or config.settle_seconds < 0:
             raise ValueError("Invalid polling settings")
         if min(config.end_grace_seconds, config.disconnect_grace_seconds,
                config.max_session_hours, config.max_slides, config.min_free_mb,
-               config.status_update_seconds) <= 0:
+               config.status_update_seconds, config.inactivity_notice_seconds) <= 0:
             raise ValueError("Runner limits must be positive")
+        if type(config.max_concurrent_sessions) is not int or not 1 <= config.max_concurrent_sessions <= 10:
+            raise ValueError("max_concurrent_sessions must be an integer from 1 to 10")
+        if type(config.max_slides) is not int or config.max_slides <= 0:
+            raise ValueError("max_slides must be a positive integer")
         return config
 
     def token(self):

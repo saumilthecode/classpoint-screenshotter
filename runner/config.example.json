@@ -13,5 +13,7 @@
   "max_session_hours": 12,
   "max_slides": 3000,
   "min_free_mb": 512,
-  "status_update_seconds": 600
+  "status_update_seconds": 600,
+  "max_concurrent_sessions": 3,
+  "inactivity_notice_seconds": 1800
 }

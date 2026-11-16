@@ -15,8 +15,11 @@ def utc_now():
 
 def atomic_write(path: Path, contents: bytes):
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_bytes(contents)
-    temporary.replace(path)
+    try:
+        temporary.write_bytes(contents)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class Session:
@@ -46,7 +49,7 @@ class Session:
         return comparison in self.comparison_hashes or pixel_hash(png) in self.hashes
 
     @classmethod
-    def create(cls, root: Path, code: str, name: str, requester_id: int, channel_id: int):
+    def create(cls, root: Path, code: str, name: str, requester_id: int, channel_id: int, export_mode: str = "all"):
         session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
         directory = root / f"{code}-{session_id}"
         (directory / "images").mkdir(parents=True, mode=0o700)
@@ -54,6 +57,7 @@ class Session:
             "id": session_id, "code": code, "name": name,
             "requester_id": requester_id, "channel_id": channel_id,
             "started_at": utc_now(), "status": "recording", "phase": "joining",
+            "connection_state": "joining", "export_mode": export_mode,
             "slides": [], "uploaded_parts": {}, "pdf_parts": [],
         })
         session.save()
@@ -66,11 +70,11 @@ class Session:
     def save(self):
         atomic_write(self.directory / "manifest.json", json.dumps(self.data, indent=2).encode())
 
-    def add_slide(self, png: bytes):
-        digest = pixel_hash(png)
+    def add_slide(self, png: bytes, digest: str | None = None, comparison: str | None = None):
+        digest = digest or pixel_hash(png)
         if digest in self.hashes:
             return False
-        comparison = comparison_hash(png)
+        comparison = comparison or comparison_hash(png)
         if comparison in self.comparison_hashes:
             return False
         filename = f"slide-{len(self.data['slides']) + 1:04d}.png"
@@ -85,7 +89,8 @@ class Session:
         return True
 
     def finish(self, reason: str):
-        self.data.update(status="pending_upload", phase="finished", reason=reason, ended_at=utc_now())
+        self.data.update(status="pending_upload", phase="finished", reason=reason, ended_at=utc_now(),
+                         connection_state="finished", export_phase="queued for PDF")
         self.save()
 
     @property
@@ -99,10 +104,15 @@ def recover_sessions(root: Path):
     for path in sorted(root.glob("*/manifest.json")):
         try:
             session = Session.load(path)
+            started = datetime.fromisoformat(session.data["started_at"])
+            if started.tzinfo is None:
+                raise ValueError("Session start time must include a timezone")
             if session.data["status"] == "recording":
                 session.finish("Runner restarted; these are the slides captured before interruption.")
             sessions.append(session)
         except (ValueError, KeyError, OSError):
             # Leave corrupt data untouched for manual recovery.
             logging.exception("Could not recover session manifest %s", path)
+    # Directory names begin with class codes; their order is not chronological.
+    sessions.sort(key=lambda session: (datetime.fromisoformat(session.data["started_at"]), session.data.get("id", "")))
     return sessions

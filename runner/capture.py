@@ -12,8 +12,8 @@ from urllib.parse import urlparse
 from playwright.async_api import Error as BrowserError, async_playwright
 
 from .config import Config
-from .dedupe import comparison_hash
-from .state import Session
+from .dedupe import fingerprints
+from .state import Session, utc_now
 
 JOIN_URL = "https://www.classpoint.app/"
 READ_STATE = Path(__file__).with_name("slide.js").read_text()
@@ -145,18 +145,18 @@ class SlideRecorder:
             self.candidate = None
             return False
         png = base64.b64decode(result["data"])
-        digest = await asyncio.to_thread(comparison_hash, png)
+        exact, digest = await asyncio.to_thread(fingerprints, png)
         if digest != self.candidate:
             self.candidate, self.candidate_since = digest, now
         if now - self.candidate_since < self.config.settle_seconds:
             return False
-        if await asyncio.to_thread(self.session.is_duplicate, png, digest):
+        if digest in self.session.comparison_hashes or exact in self.session.hashes:
             return False
-        if len(self.session.images) >= self.config.max_slides:
+        if len(self.session.data["slides"]) >= self.config.max_slides:
             raise RuntimeError("Slide safety limit reached; recorded slides are preserved.")
         if shutil.disk_usage(self.session.directory).free < self.config.min_free_mb * 1024 * 1024:
             raise RuntimeError("Low disk space; recorded slides are preserved.")
-        return self.session.add_slide(png)
+        return self.session.add_slide(png, exact, digest)
 
     async def watch(self, page, stop: asyncio.Event, on_joined=None):
         cdp = await page.context.new_cdp_session(page)
@@ -176,6 +176,8 @@ class SlideRecorder:
                     state = await page.evaluate(READ_STATE)
                     if self.socket and (self.socket_closed or now - self.last_socket_frame > 60):
                         state["disconnected"] = True
+                    self.session.data.update(last_checked_at=utc_now(), connection_state=(
+                        "reconnecting" if state["disconnected"] else "classroom connected" if state["classroom"] else "outside classroom"))
                     reason = detector.update(state, now)
                     if reason:
                         return reason
@@ -188,6 +190,7 @@ class SlideRecorder:
                         self.session.save()
                     error_since = None
                 except BrowserError:
+                    self.session.data.update(connection_state="browser error", phase="reconnecting")
                     self.candidate = None
                     error_since = now if error_since is None else error_since
                     if now - error_since >= self.config.disconnect_grace_seconds:

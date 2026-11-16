@@ -37,6 +37,17 @@ def png(color, size=(640, 360)):
 
 
 class StateAndPDFTest(unittest.TestCase):
+    def test_recovery_orders_sessions_by_start_time_instead_of_class_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            older = Session.create(Path(tmp), "99999", "Student", 10, 20)
+            newer = Session.create(Path(tmp), "11111", "Student", 10, 20)
+            older.data["started_at"] = "2026-10-26T07:27:15+00:00"
+            newer.data["started_at"] = "2026-11-16T00:15:21+00:00"
+            older.finish("Done")
+            newer.finish("Done")
+            recovered = recover_sessions(Path(tmp))
+            self.assertEqual([s.data["code"] for s in recovered], ["99999", "11111"])
+
     def test_content_dedup_recovery_and_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = Session.create(Path(tmp), "12345", "Student", 10, 20)
