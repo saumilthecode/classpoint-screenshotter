@@ -1,6 +1,7 @@
 """Offline tests: no real class is joined and no Discord messages are sent."""
 
 import asyncio
+import base64
 import io
 from pathlib import Path
 import tempfile
@@ -194,6 +195,49 @@ class RunnerBrowserTest(unittest.IsolatedAsyncioTestCase):
         with Image.open(self.session.images[-1]) as image:
             self.assertEqual(image.size, (640, 360))
             self.assertEqual(image.getpixel((0, 0))[:3], (40, 100, 220))
+
+    async def test_capture_renders_native_detail_and_preserves_overlay(self):
+        image = Image.new("RGB", (1280, 720), "white")
+        image.paste((0, 0, 0), (65, 0, 66, 720))
+        buffer = io.BytesIO()
+        image.save(buffer, "PNG")
+        src = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+        await self.show("a")
+        await self.page.locator(".presenter_img img").evaluate("async (image, src) => {image.src = src; await image.decode();}", src)
+        await self.page.evaluate("annotate()")
+        self.assertTrue(await self.recorder.capture_once(self.page, self.cdp, 0))
+        saved = self.session.data["slides"][0]
+        self.assertEqual(saved["source_size"], [1280, 720])
+        self.assertEqual(saved["capture_scale"], 2)
+        with Image.open(self.session.images[0]) as image:
+            self.assertEqual(image.size, (1280, 720))
+            self.assertEqual(image.getpixel((65, 9))[:3], (0, 0, 0))
+            self.assertEqual(image.getpixel((64, 9))[:3], (255, 255, 255))
+            self.assertEqual(image.getpixel((410, 410))[:3], (255, 0, 255))
+
+    async def test_loaded_slide_wakes_watch_and_confirms_before_fallback_poll(self):
+        self.recorder.config.poll_seconds = 4
+        self.recorder.config.settle_seconds = 0.3
+        await self.page.expose_function("__classpointRequestCheck", self.recorder.check_requested.set)
+        first_wait = asyncio.Event()
+        original_wait = self.recorder.wait_for_check
+
+        async def wait(stop):
+            first_wait.set()
+            await original_wait(stop)
+
+        self.recorder.wait_for_check = wait
+        task = asyncio.create_task(self.recorder.watch(self.page, self.stop))
+        try:
+            await asyncio.wait_for(first_wait.wait(), 2)
+            await self.show("a")
+            async with asyncio.timeout(2):
+                while not self.session.images:
+                    await asyncio.sleep(0.02)
+            self.assertEqual(len(self.session.images), 1)
+        finally:
+            self.stop.set()
+            await asyncio.wait_for(task, 2)
 
     async def test_detect_end_and_manual_stop(self):
         task = asyncio.create_task(self.recorder.watch(self.page, self.stop))

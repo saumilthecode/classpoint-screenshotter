@@ -15,5 +15,6 @@
   "min_free_mb": 512,
   "status_update_seconds": 600,
   "max_concurrent_sessions": 3,
-  "inactivity_notice_seconds": 1800
+  "inactivity_notice_seconds": 1800,
+  "max_capture_scale": 2.0
 }

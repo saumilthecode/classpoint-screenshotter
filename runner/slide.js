@@ -37,6 +37,7 @@
   state.slide = {
     src: image.currentSrc || image.src,
     clip: { x, y, width, height, scale: 1 },
+    source_size: [image.naturalWidth, image.naturalHeight],
     revision: window.__classpointSlideRevision || 0
   };
   return state;

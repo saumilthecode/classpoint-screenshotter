@@ -87,7 +87,7 @@ systemctl --user stop classpoint-screenshotter
 
 ## Capture and storage
 
-The recorder captures the slide area and compares decoded pixels against earlier captures in the session. It skips duplicates, waiting screens, sharing-disabled placeholders, and slides covered by dialogs. Edits and annotations produce new images. Short-lived slides and continuous animations can be missed because capture requires stable content.
+The recorder renders the slide area at up to twice the displayed resolution when the source image has more pixels. It includes visible annotations and records the source dimensions and capture scale in the manifest. It checks after slide image loads and updates in addition to polling, then rechecks new content after the settle window. Brief slides and continuous animations can still be missed. It skips duplicates, waiting screens, sharing-disabled placeholders, and slides covered by dialogs.
 
 Deduplication also recognizes the PowerPoint navigation strip that sometimes appears at the bottom left. The entire strip must match the bundled template exactly; unfamiliar controls and any added marks are kept. The rest of the slide is compared pixel for pixel, and original PNGs are saved unchanged.
 
@@ -95,8 +95,9 @@ A return to the join screen or an end/removal notice ends recording after a grac
 
 | Setting | Default |
 | --- | --- |
-| `poll_seconds` | 1 second |
+| `poll_seconds` | 1 second between fallback checks |
 | `settle_seconds` | 0.6 seconds |
+| `max_capture_scale` | 2 (configurable from 1 to 2) |
 | `end_grace_seconds` | 15 seconds |
 | `disconnect_grace_seconds` | 120 seconds |
 | `max_session_hours` | 12 hours |

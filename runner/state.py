@@ -70,7 +70,8 @@ class Session:
     def save(self):
         atomic_write(self.directory / "manifest.json", json.dumps(self.data, indent=2).encode())
 
-    def add_slide(self, png: bytes, digest: str | None = None, comparison: str | None = None):
+    def add_slide(self, png: bytes, digest: str | None = None, comparison: str | None = None,
+                  *, source_size: list[int] | None = None, capture_scale: float = 1.0):
         digest = digest or pixel_hash(png)
         if digest in self.hashes:
             return False
@@ -79,10 +80,11 @@ class Session:
             return False
         filename = f"slide-{len(self.data['slides']) + 1:04d}.png"
         atomic_write(self.directory / "images" / filename, png)
-        self.data["slides"].append({"file": filename, "hash": digest,
-                                    "comparison_hash": comparison,
-                                    "comparison_version": COMPARISON_VERSION,
-                                    "captured_at": utc_now()})
+        entry = {"file": filename, "hash": digest, "comparison_hash": comparison,
+                 "comparison_version": COMPARISON_VERSION, "captured_at": utc_now()}
+        if source_size is not None:
+            entry.update(source_size=source_size, capture_scale=capture_scale)
+        self.data["slides"].append(entry)
         self.hashes.add(digest)
         self.comparison_hashes.add(comparison)
         self.save()

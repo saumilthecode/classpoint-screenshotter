@@ -23,17 +23,21 @@ class Config:
     status_update_seconds: float = 600
     max_concurrent_sessions: int = 3
     inactivity_notice_seconds: float = 1800
+    max_capture_scale: float = 2.0
 
     @classmethod
     def load(cls, path: Path):
         config = cls(**json.loads(path.read_text()))
         for key in ("poll_seconds", "settle_seconds", "end_grace_seconds", "disconnect_grace_seconds",
-                    "max_session_hours", "min_free_mb", "status_update_seconds", "inactivity_notice_seconds"):
+                    "max_session_hours", "min_free_mb", "status_update_seconds", "inactivity_notice_seconds",
+                    "max_capture_scale"):
             value = getattr(config, key)
             if type(value) not in (int, float) or not math.isfinite(value):
                 raise ValueError(f"{key} must be a finite number")
         if config.poll_seconds < 0.1 or config.settle_seconds < 0:
             raise ValueError("Invalid polling settings")
+        if not 1 <= config.max_capture_scale <= 2:
+            raise ValueError("max_capture_scale must be between 1 and 2")
         if min(config.end_grace_seconds, config.disconnect_grace_seconds,
                config.max_session_hours, config.max_slides, config.min_free_mb,
                config.status_update_seconds, config.inactivity_notice_seconds) <= 0:

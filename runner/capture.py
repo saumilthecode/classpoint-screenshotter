@@ -17,14 +17,25 @@ from .state import Session, utc_now
 
 JOIN_URL = "https://www.classpoint.app/"
 READ_STATE = Path(__file__).with_name("slide.js").read_text()
+MIN_EVENT_CHECK_SECONDS = 0.25
 OBSERVE = """(() => {
   window.__classpointSlideRevision = 0;
+  let pending = false;
+  const changed = () => {
+    window.__classpointSlideRevision++;
+    if (pending || !window.__classpointRequestCheck) return;
+    pending = true;
+    setTimeout(() => {
+      pending = false;
+      window.__classpointRequestCheck().catch(() => {});
+    }, 100);
+  };
   new MutationObserver(records => {
     if (records.some(({target}) => (target.nodeType === 1 ? target : target.parentElement)?.closest('.presenter_img')))
-      window.__classpointSlideRevision++;
+      changed();
   }).observe(document, {subtree:true, attributes:true, childList:true, characterData:true});
   document.addEventListener('load', event => {
-    if (event.target.matches?.('.presenter_img img')) window.__classpointSlideRevision++;
+    if (event.target.matches?.('.presenter_img img')) changed();
   }, true);
 })();"""
 
@@ -105,6 +116,8 @@ class SlideRecorder:
         self.session = session
         self.candidate = None
         self.candidate_since = 0.0
+        self.pending_confirmation = False
+        self.check_requested = asyncio.Event()
         self.socket = None
         self.socket_closed = False
         self.last_socket_frame = None
@@ -130,33 +143,64 @@ class SlideRecorder:
         socket.on("framereceived", received)
         socket.on("close", closed)
 
-    async def capture_once(self, page, cdp, now: float):
-        before = await page.evaluate(READ_STATE)
+    async def capture_once(self, page, cdp, now: float | None = None, before=None):
+        self.pending_confirmation = False
+        if before is None:
+            before = await page.evaluate(READ_STATE)
         slide = before["slide"]
         if not slide or before["ended"] or before["disconnected"]:
             self.candidate = None
             return False
+        clip = slide["clip"].copy()
+        source_size = slide.get("source_size")
+        if source_size:
+            # Chromium paints the crop at this density, including any visible ink.
+            source_width, source_height = source_size
+            scale = max(1.0, min(source_width / clip["width"], source_height / clip["height"]))
+            clip["scale"] = min(scale, self.config.max_capture_scale)
         result = await cdp.send("Page.captureScreenshot", {
             "format": "png", "fromSurface": True, "captureBeyondViewport": True,
-            "clip": slide["clip"],
+            "clip": clip,
         })
+        observed_at = time.monotonic() if now is None else now
         after = await page.evaluate(READ_STATE)
         if after["slide"] != slide or after["ended"] or after["disconnected"]:
             self.candidate = None
             return False
         png = base64.b64decode(result["data"])
         exact, digest = await asyncio.to_thread(fingerprints, png)
-        if digest != self.candidate:
-            self.candidate, self.candidate_since = digest, now
-        if now - self.candidate_since < self.config.settle_seconds:
-            return False
         if digest in self.session.comparison_hashes or exact in self.session.hashes:
+            self.candidate = None
+            return False
+        if digest != self.candidate:
+            self.candidate, self.candidate_since = digest, observed_at
+        if observed_at - self.candidate_since < self.config.settle_seconds:
+            self.pending_confirmation = True
             return False
         if len(self.session.data["slides"]) >= self.config.max_slides:
             raise RuntimeError("Slide safety limit reached; recorded slides are preserved.")
         if shutil.disk_usage(self.session.directory).free < self.config.min_free_mb * 1024 * 1024:
             raise RuntimeError("Low disk space; recorded slides are preserved.")
-        return self.session.add_slide(png, exact, digest)
+        return self.session.add_slide(png, exact, digest, source_size=source_size,
+                                      capture_scale=clip.get("scale", 1.0))
+
+    async def wait_for_check(self, stop: asyncio.Event):
+        ready_at = time.monotonic() + min(MIN_EVENT_CHECK_SECONDS, self.config.poll_seconds)
+        delay = self.config.poll_seconds
+        if self.pending_confirmation:
+            remaining = self.candidate_since + self.config.settle_seconds - time.monotonic()
+            delay = min(delay, max(0.1, remaining))
+        tasks = [asyncio.create_task(event.wait()) for event in (stop, self.check_requested)]
+        try:
+            await asyncio.wait(tasks, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        # Continuous DOM activity can otherwise request a full PNG at 10 Hz.
+        remaining = ready_at - time.monotonic()
+        if remaining > 0 and not stop.is_set():
+            await pause_or_stop(stop, remaining)
 
     async def watch(self, page, stop: asyncio.Event, on_joined=None):
         cdp = await page.context.new_cdp_session(page)
@@ -167,6 +211,7 @@ class SlideRecorder:
             await on_joined()
         try:
             while not stop.is_set():
+                self.check_requested.clear()
                 now = time.monotonic()
                 if now - started >= self.config.max_session_hours * 3600:
                     return "Maximum recording duration reached; captured slides are preserved."
@@ -182,7 +227,10 @@ class SlideRecorder:
                     if reason:
                         return reason
                     if not state["disconnected"]:
-                        await self.capture_once(page, cdp, now)
+                        await self.capture_once(page, cdp, before=state)
+                    else:
+                        self.candidate = None
+                        self.pending_confirmation = False
                     phase = ("reconnecting" if state["disconnected"] else
                              "recording slides" if state["slide"] else "waiting for presenter/slides")
                     if self.session.data["phase"] != phase:
@@ -192,10 +240,11 @@ class SlideRecorder:
                 except BrowserError:
                     self.session.data.update(connection_state="browser error", phase="reconnecting")
                     self.candidate = None
+                    self.pending_confirmation = False
                     error_since = now if error_since is None else error_since
                     if now - error_since >= self.config.disconnect_grace_seconds:
                         return "Browser connection failed; captured slides are preserved."
-                await pause_or_stop(stop, self.config.poll_seconds)
+                await self.wait_for_check(stop)
             return "Recording stopped by request."
         finally:
             try:
@@ -210,6 +259,7 @@ class SlideRecorder:
                 context = await browser.new_context(viewport={"width": 1600, "height": 1000}, device_scale_factor=1)
                 await context.add_init_script(OBSERVE)
                 page = await context.new_page()
+                await page.expose_function("__classpointRequestCheck", self.check_requested.set)
                 page.on("websocket", self.observe_socket)
                 await join_class(page, self.session.data["code"], self.session.data["name"], stop)
                 return await self.watch(page, stop, on_joined)
