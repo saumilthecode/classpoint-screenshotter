@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 from playwright.async_api import async_playwright
@@ -214,6 +214,88 @@ class RunnerBrowserTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(image.getpixel((65, 9))[:3], (0, 0, 0))
             self.assertEqual(image.getpixel((64, 9))[:3], (255, 255, 255))
             self.assertEqual(image.getpixel((410, 410))[:3], (255, 0, 255))
+
+    async def test_hidden_slide_and_small_icon_cannot_hide_active_slide(self):
+        await self.show("b")
+        await self.page.evaluate("""() => {
+            const active = document.querySelector('.presenter_img');
+            const hidden = active.cloneNode(true);
+            hidden.style.opacity = '0';
+            active.before(hidden);
+            const icon = active.firstElementChild.cloneNode(true);
+            Object.assign(icon.style, { width: '30px', height: '20px' });
+            active.prepend(icon);
+        }""")
+        self.assertTrue(await self.recorder.capture_once(self.page, self.cdp, 0))
+        with Image.open(self.session.images[0]) as image:
+            self.assertEqual(image.size, (640, 360))
+        await self.page.evaluate("""() => {
+            const hidden = document.querySelector('.presenter_img');
+            hidden.style.opacity = '1';
+        }""")
+        self.assertIsNone((await self.page.evaluate(READ_STATE))["slide"])
+        await self.page.evaluate("""() => {
+            const classroom = document.querySelector('.classroom');
+            Object.assign(classroom.style, { overflow: 'hidden', position: 'relative' });
+            const clipped = classroom.querySelector('.presenter_img');
+            Object.assign(clipped.style, { position: 'absolute', left: '2000px' });
+        }""")
+        self.assertIsNotNone((await self.page.evaluate(READ_STATE))["slide"])
+
+    async def test_join_notification_does_not_block_capture(self):
+        reply_started = asyncio.Event()
+
+        async def blocked_reply():
+            reply_started.set()
+            await asyncio.Future()
+
+        await self.show("a")
+        task = asyncio.create_task(self.recorder.watch(self.page, self.stop, blocked_reply))
+        try:
+            await asyncio.wait_for(reply_started.wait(), 2)
+            async with asyncio.timeout(2):
+                while not self.session.images:
+                    await asyncio.sleep(0.02)
+        finally:
+            self.stop.set()
+            await asyncio.wait_for(task, 2)
+
+    async def test_waits_for_a_fading_slide_to_finish(self):
+        await self.show("a")
+        await self.page.locator(".presenter_img").evaluate("""layer => {
+            window.slideFade = layer.animate({ opacity: [0.5, 1] }, 10_000);
+        }""")
+        self.assertFalse(await self.recorder.capture_once(self.page, self.cdp, 0))
+        await self.page.evaluate("slideFade.finish()")
+        self.assertTrue(await self.recorder.capture_once(self.page, self.cdp, 1))
+
+    async def test_object_fit_none_crops_visible_source_without_enlarging(self):
+        await self.show("b")
+        await self.page.locator(".presenter_img img").evaluate("""image => Object.assign(image.style, {
+            width: '600px', height: '300px', objectFit: 'none',
+            objectPosition: 'right 20px bottom 10px'
+        })""")
+        self.assertTrue(await self.recorder.capture_once(self.page, self.cdp, 0))
+        self.assertEqual(self.session.data["slides"][0]["capture_scale"], 1)
+        with Image.open(self.session.images[0]) as image:
+            self.assertEqual(image.size, (580, 290))
+            self.assertEqual(image.getpixel((579, 289))[:3], (40, 100, 220))
+
+    async def test_an_open_quiet_socket_does_not_prevent_capture(self):
+        await self.show("a")
+        socket = SimpleNamespace(url="wss://example.classpoint.app/classsession", on=lambda *args: None,
+                                 is_closed=lambda: False)
+        clock = SimpleNamespace(monotonic=lambda: 0)
+        with patch("runner.capture.time", clock):
+            self.recorder.observe_socket(socket)
+            clock.monotonic = lambda: 90
+
+            async def stop_after_first_pass(stop):
+                stop.set()
+
+            self.recorder.wait_for_check = stop_after_first_pass
+            await self.recorder.watch(self.page, self.stop)
+        self.assertEqual(len(self.session.images), 1)
 
     async def test_loaded_slide_wakes_watch_and_confirms_before_fallback_poll(self):
         self.recorder.config.poll_seconds = 4

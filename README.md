@@ -89,7 +89,7 @@ systemctl --user stop classpoint-screenshotter
 
 The recorder renders the slide area at up to twice the displayed resolution when the source image has more pixels. It includes visible annotations and records the source dimensions and capture scale in the manifest. It checks after slide image loads and updates in addition to polling, then rechecks new content after the settle window. Brief slides and continuous animations can still be missed. It skips duplicates, waiting screens, sharing-disabled placeholders, and slides covered by dialogs.
 
-Deduplication also recognizes the PowerPoint navigation strip that sometimes appears at the bottom left. The entire strip must match the bundled template exactly; unfamiliar controls and any added marks are kept. The rest of the slide is compared pixel for pixel, and original PNGs are saved unchanged.
+Deduplication also recognizes the PowerPoint navigation strip that sometimes appears at the bottom left. The entire patch must match the white strip template or a verified pair of toolbar-on and toolbar-off pixels. The rest of the slide is compared pixel for pixel. Different footer layouts and additional ink can produce separate captures, and saved PNGs retain their original pixels.
 
 A return to the join screen or an end/removal notice ends recording after a grace period. Leaving slideshow mode alone does not end it; use `/classpoint stop` if the class stays open.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 import re
 import shutil
@@ -18,6 +19,7 @@ from .state import Session, utc_now
 JOIN_URL = "https://www.classpoint.app/"
 READ_STATE = Path(__file__).with_name("slide.js").read_text()
 MIN_EVENT_CHECK_SECONDS = 0.25
+LOG = logging.getLogger(__name__)
 OBSERVE = """(() => {
   window.__classpointSlideRevision = 0;
   let pending = false;
@@ -30,8 +32,11 @@ OBSERVE = """(() => {
       window.__classpointRequestCheck().catch(() => {});
     }, 100);
   };
+  const inSlide = node => (node.nodeType === 1 ? node : node.parentElement)?.closest('.presenter_img');
   new MutationObserver(records => {
-    if (records.some(({target}) => (target.nodeType === 1 ? target : target.parentElement)?.closest('.presenter_img')))
+    if (records.some(record => inSlide(record.target) || (record.type === 'childList' &&
+      [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1 &&
+        (node.matches('.presenter_img') || node.querySelector('.presenter_img'))))))
       changed();
   }).observe(document, {subtree:true, attributes:true, childList:true, characterData:true});
   document.addEventListener('load', event => {
@@ -116,32 +121,20 @@ class SlideRecorder:
         self.session = session
         self.candidate = None
         self.candidate_since = 0.0
+        self.candidate_crop = None
         self.pending_confirmation = False
         self.check_requested = asyncio.Event()
         self.socket = None
-        self.socket_closed = False
-        self.last_socket_frame = None
 
     def observe_socket(self, socket):
         # Track the classroom WebSocket for connection loss.
         parsed = urlparse(socket.url)
-        if parsed.path != "/classsession" or not (parsed.hostname or "").endswith(".classpoint.app"):
+        host = parsed.hostname or ""
+        if parsed.path != "/classsession" or not (host == "classpoint.app" or host.endswith(".classpoint.app")):
             return
         self.socket = socket
-        self.socket_closed = False
-        self.last_socket_frame = time.monotonic()
-
-        def received(_frame):
-            if self.socket is socket:
-                self.socket_closed = False
-                self.last_socket_frame = time.monotonic()
-
-        def closed(_socket):
-            if self.socket is socket:
-                self.socket_closed = True
-
-        socket.on("framereceived", received)
-        socket.on("close", closed)
+        self.check_requested.set()
+        socket.on("close", lambda _: self.check_requested.set())
 
     async def capture_once(self, page, cdp, now: float | None = None, before=None):
         self.pending_confirmation = False
@@ -153,11 +146,9 @@ class SlideRecorder:
             return False
         clip = slide["clip"].copy()
         source_size = slide.get("source_size")
-        if source_size:
-            # Chromium paints the crop at this density, including any visible ink.
-            source_width, source_height = source_size
-            scale = max(1.0, min(source_width / clip["width"], source_height / clip["height"]))
-            clip["scale"] = min(scale, self.config.max_capture_scale)
+        # Density comes from the painted image before object-fit clipping.
+        # Chromium paints the crop at this density, including visible ink.
+        clip["scale"] = min(max(1.0, slide.get("source_density", 1.0)), self.config.max_capture_scale)
         result = await cdp.send("Page.captureScreenshot", {
             "format": "png", "fromSurface": True, "captureBeyondViewport": True,
             "clip": clip,
@@ -172,8 +163,10 @@ class SlideRecorder:
         if digest in self.session.comparison_hashes or exact in self.session.hashes:
             self.candidate = None
             return False
-        if digest != self.candidate:
+        crop = (clip, source_size)
+        if digest != self.candidate or crop != self.candidate_crop:
             self.candidate, self.candidate_since = digest, observed_at
+            self.candidate_crop = crop
         if observed_at - self.candidate_since < self.config.settle_seconds:
             self.pending_confirmation = True
             return False
@@ -207,8 +200,13 @@ class SlideRecorder:
         detector = EndDetector(self.config.end_grace_seconds, self.config.disconnect_grace_seconds)
         started = time.monotonic()
         error_since = None
-        if on_joined:
-            await on_joined()
+        async def notify_joined():
+            try:
+                await on_joined()
+            except Exception:
+                LOG.exception("Failed to announce that class recording started")
+
+        notification = asyncio.create_task(notify_joined()) if on_joined else None
         try:
             while not stop.is_set():
                 self.check_requested.clear()
@@ -219,7 +217,8 @@ class SlideRecorder:
                     return "Browser closed unexpectedly; captured slides are preserved."
                 try:
                     state = await page.evaluate(READ_STATE)
-                    if self.socket and (self.socket_closed or now - self.last_socket_frame > 60):
+                    # Quiet classrooms may have no slide traffic for minutes.
+                    if self.socket and self.socket.is_closed():
                         state["disconnected"] = True
                     self.session.data.update(last_checked_at=utc_now(), connection_state=(
                         "reconnecting" if state["disconnected"] else "classroom connected" if state["classroom"] else "outside classroom"))
@@ -247,6 +246,9 @@ class SlideRecorder:
                 await self.wait_for_check(stop)
             return "Recording stopped by request."
         finally:
+            if notification:
+                notification.cancel()
+                await asyncio.gather(notification, return_exceptions=True)
             try:
                 await cdp.detach()
             except BrowserError:

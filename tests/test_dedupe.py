@@ -1,10 +1,11 @@
 import base64
+from hashlib import sha256
 import io
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from PIL import Image, ImageDraw
 
@@ -34,6 +35,19 @@ def slide(controls=False):
 
 
 class DedupeTest(unittest.TestCase):
+    def test_verified_nonwhite_toolbar_pair_preserves_other_changes(self):
+        clean = Image.new("RGB", (120, 80), "orange")
+        toolbar = clean.copy()
+        ImageDraw.Draw(toolbar).ellipse((2, 69, 10, 77), outline="white")
+        box = (0, 68, 30, 80)
+        digests = {sha256(image.crop(box).tobytes()).hexdigest() for image in (clean, toolbar)}
+        with patch.dict("runner.dedupe.TOOLBAR_PAIRS", {clean.size: ((30, 12), digests)}):
+            self.assertEqual(comparison_hash(encode(clean)), comparison_hash(encode(toolbar)))
+            for point in ((1, 70), (31, 70)):
+                annotated = toolbar.copy()
+                annotated.putpixel(point, (100, 42, 77))
+                self.assertNotEqual(comparison_hash(encode(clean)), comparison_hash(encode(annotated)))
+
     def test_only_known_controls_are_ignored(self):
         plain, controls = encode(slide()), encode(slide(True))
         self.assertNotEqual(pixel_hash(plain), pixel_hash(controls))
